@@ -1,7 +1,6 @@
 # HeartGreatGraph ❤️📈
 
 [![Latest Release](https://img.shields.io/github/v/release/gitanO0/HeartGreatGraph?style=for-the-badge&color=blue)](https://github.com/gitanO0/HeartGreatGraph/releases/latest)
-[![Download APK](https://img.shields.io/github/downloads/gitanO0/HeartGreatGraph/total?style=for-the-badge&color=green&label=Download%20APK)](https://github.com/gitanO0/HeartGreatGraph/releases/latest)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/gitanO0/HeartGreatGraph/build-apk.yml?style=for-the-badge)](https://github.com/gitanO0/HeartGreatGraph/actions)
 
 Welcome to **HeartGreatGraph**! This is a straight-forward, privacy-first, on-device Android application designed to give you clear and interactive insights into your heart rate data over the last 24 hours.
