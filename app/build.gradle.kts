@@ -13,8 +13,8 @@ android {
         applicationId = "com.royce.heartgreatgraph"
         minSdk = 37
         targetSdk = 37
-        versionCode = 26
-        versionName = "1.26"
+        versionCode = 27
+        versionName = "1.27"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
