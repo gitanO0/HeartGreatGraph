@@ -46,5 +46,12 @@ If you want to build the project yourself using Android Studio:
 2. Open the project in Android Studio (Koala or newer recommended).
 3. Build and Run! (Note: The app requires API 34+ to run).
 
+## Screenshots
+
+<div align="center">
+  <img src="screenshots/graph.png" width="30%"  alt=""/>
+</div>
+
+
 ---
 *Created by Royce.*
