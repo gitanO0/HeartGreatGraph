@@ -4,7 +4,7 @@
 [![Download APK](https://img.shields.io/github/downloads/gitanO0/HeartGreatGraph/total?style=for-the-badge&color=green&label=Download%20APK)](https://github.com/gitanO0/HeartGreatGraph/releases/latest)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/gitanO0/HeartGreatGraph/build-apk.yml?style=for-the-badge)](https://github.com/gitanO0/HeartGreatGraph/actions)
 
-Welcome to **HeartGreatGraph**! This is a beautiful, privacy-first, on-device Android application designed to give you clear and interactive insights into your heart rate data over the last 24 hours.
+Welcome to **HeartGreatGraph**! This is a straight-forward, privacy-first, on-device Android application designed to give you clear and interactive insights into your heart rate data over the last 24 hours.
 
 Using the official Android **Health Connect API**, HeartGreatGraph securely reads your existing heart rate measurements (whether they come from your smartwatch, fitness tracker, or phone) and visualizes them in an elegant, easy-to-read chart.
 
