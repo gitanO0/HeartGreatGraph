@@ -13,8 +13,8 @@ android {
         applicationId = "com.royce.heartgreatgraph"
         minSdk = 37
         targetSdk = 37
-        versionCode = 27
-        versionName = "1.27"
+        versionCode = 30
+        versionName = "1.30"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -44,7 +44,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation("androidx.health.connect:connect-client:1.1.0")
+    implementation(libs.androidx.health.connect.client)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
