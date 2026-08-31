@@ -72,7 +72,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var healthConnectClient: HealthConnectClient
 
     private val permissions = setOf(
-        HealthPermission.getReadPermission(HeartRateRecord::class)
+        HealthPermission.getReadPermission(HeartRateRecord::class),
+        HealthPermission.getReadPermission(androidx.health.connect.client.records.TotalCaloriesBurnedRecord::class)
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -90,6 +91,8 @@ class MainActivity : ComponentActivity() {
                     var hasPermissions by remember { mutableStateOf(false) }
                     var refreshTrigger by remember { mutableIntStateOf(0) }
                     var heartRateData by remember { mutableStateOf<List<HeartRateRecord>>(emptyList()) }
+                    var caloriesData by remember { mutableStateOf<List<androidx.health.connect.client.records.TotalCaloriesBurnedRecord>>(emptyList()) }
+                    var showCalories by remember { mutableStateOf(false) }
                     var sdkAvailable by remember { mutableStateOf(availabilityStatus == HealthConnectClient.SDK_AVAILABLE) }
                     var sdkError by remember { mutableStateOf<String?>(null) }
                     val coroutineScope = rememberCoroutineScope()
@@ -106,6 +109,7 @@ class MainActivity : ComponentActivity() {
                             hasPermissions = true
                             coroutineScope.launch {
                                 heartRateData = readHeartRateData(healthConnectClient)
+                                caloriesData = readCaloriesData(healthConnectClient)
                             }
                         }
                     }
@@ -120,6 +124,7 @@ class MainActivity : ComponentActivity() {
                         if (hasPermissions) {
                             while(true) {
                                 heartRateData = readHeartRateData(healthConnectClient)
+                                caloriesData = readCaloriesData(healthConnectClient)
                                 delay(5 * 60 * 1000L) // Wait 5 minutes
                             }
                         }
@@ -158,10 +163,19 @@ class MainActivity : ComponentActivity() {
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(
-                                        text = "Heart Rate (Last 24 Hours)",
-                                        style = MaterialTheme.typography.titleMedium
-                                    )
+                                    Column {
+                                        Text(
+                                            text = "Heart Rate (Last 24 Hours)",
+                                            style = MaterialTheme.typography.titleMedium
+                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            androidx.compose.material3.Checkbox(
+                                                checked = showCalories,
+                                                onCheckedChange = { showCalories = it },
+                                            )
+                                            Text(text = "Show Calories", fontSize = 12.sp)
+                                        }
+                                    }
                                     Button(
                                         onClick = { 
                                             refreshTrigger++
@@ -173,6 +187,8 @@ class MainActivity : ComponentActivity() {
                                 }
                                 HeartRateGraph(
                                     heartRateData = heartRateData,
+                                    caloriesData = caloriesData,
+                                    showCalories = showCalories,
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .weight(1f) // Takes up remaining space instead of fixed 300.dp
@@ -229,10 +245,47 @@ class MainActivity : ComponentActivity() {
             emptyList()
         }
     }
+
+    private suspend fun readCaloriesData(client: HealthConnectClient): List<androidx.health.connect.client.records.TotalCaloriesBurnedRecord> {
+        val zoneId = ZoneId.systemDefault()
+        // Get current time in local timezone
+        val nowZoned = ZonedDateTime.now(zoneId)
+        val startTimeZoned = nowZoned.minusHours(24)
+        
+        val endTime = nowZoned.toInstant()
+        val startTime = startTimeZoned.toInstant()
+
+        return try {
+            val allRecords = mutableListOf<androidx.health.connect.client.records.TotalCaloriesBurnedRecord>()
+            var pageToken: String? = null
+            
+            do {
+                val readResponse = client.readRecords(
+                    ReadRecordsRequest(
+                        recordType = androidx.health.connect.client.records.TotalCaloriesBurnedRecord::class,
+                        timeRangeFilter = TimeRangeFilter.between(startTime, endTime),
+                        pageToken = pageToken
+                    )
+                )
+                allRecords.addAll(readResponse.records)
+                pageToken = readResponse.pageToken
+            } while (pageToken != null)
+            
+            allRecords
+        } catch (e: Exception) {
+            e.printStackTrace()
+            emptyList()
+        }
+    }
 }
 
 @Composable
-fun HeartRateGraph(heartRateData: List<HeartRateRecord>, modifier: Modifier = Modifier) {
+fun HeartRateGraph(
+    heartRateData: List<HeartRateRecord>,
+    caloriesData: List<androidx.health.connect.client.records.TotalCaloriesBurnedRecord>,
+    showCalories: Boolean,
+    modifier: Modifier = Modifier
+) {
     if (heartRateData.isEmpty()) {
         Box(modifier = modifier, contentAlignment = Alignment.Center) {
             Text("No heart rate data available for the last 24 hours.")
@@ -396,6 +449,183 @@ fun HeartRateGraph(heartRateData: List<HeartRateRecord>, modifier: Modifier = Mo
         val width = size.width
         val height = size.height
 
+        // Calculate grid intervals dynamically based on visible range (needed for both calories and grid)
+        val gridIntervalMs = when {
+            visibleTimeRange <= 2 * 60 * 60 * 1000L -> 15 * 60 * 1000L // <= 2 hours: 15 min grid
+            visibleTimeRange <= 6 * 60 * 60 * 1000L -> 30 * 60 * 1000L // <= 6 hours: 30 min grid
+            visibleTimeRange <= 12 * 60 * 60 * 1000L -> 60 * 60 * 1000L // <= 12 hours: 1 hour grid
+            else -> 2 * 60 * 60 * 1000L // > 12 hours: 2 hour grid
+        }
+        
+        // --- CALORIES BUCKETING & DRAWING LOGIC ---
+        if (showCalories && caloriesData.isNotEmpty()) {
+            val bucketWidthMs = gridIntervalMs / 2 // double resolution!
+            
+            // Find what buckets actually intersect our visible window
+            val firstVisibleBucketStart = visibleStartTime - (visibleStartTime % bucketWidthMs)
+            
+            val buckets = mutableMapOf<Long, Double>()
+            
+            val relevantCalories = caloriesData.filter { 
+                it.startTime.toEpochMilli() <= visibleEndTime + (2 * 60 * 60 * 1000L) && 
+                it.endTime.toEpochMilli() >= visibleStartTime - (2 * 60 * 60 * 1000L)
+            }
+
+            for (record in relevantCalories) {
+                val recordStartMs = record.startTime.toEpochMilli()
+                val recordEndMs = record.endTime.toEpochMilli()
+                val recordDuration = recordEndMs - recordStartMs
+                if (recordDuration <= 0) continue
+                
+                val cals = record.energy.inKilocalories
+                val calsPerMs = cals / recordDuration
+
+                var currentMs = recordStartMs
+                while (currentMs < recordEndMs) {
+                    val bucketStart = currentMs - (currentMs % bucketWidthMs)
+                    val bucketEnd = bucketStart + bucketWidthMs
+                    val nextStep = minOf(recordEndMs, bucketEnd)
+                    
+                    val durationInBucket = nextStep - currentMs
+                    val calsInBucket = durationInBucket * calsPerMs
+                    
+                    buckets[bucketStart] = (buckets[bucketStart] ?: 0.0) + calsInBucket
+                    currentMs = nextStep
+                }
+            }
+
+            // Figure out the max to scale colors
+            val visibleBuckets = buckets.filterKeys { it in firstVisibleBucketStart..visibleEndTime }
+            val maxCalsInView = visibleBuckets.values.maxOrNull() ?: 1.0
+
+            clipRect(left = 0f, top = 0f, right = width, bottom = height) {
+                val barWidth = (bucketWidthMs.toFloat() / visibleTimeRange.toFloat()) * width
+                
+                for ((bucketTime, cals) in visibleBuckets) {
+                    if (cals <= 0.1) continue // Skip essentially empty buckets
+                    
+                    val fraction = (cals / maxCalsInView).coerceIn(0.0, 1.0)
+                    
+                    // Soft blue (low) to Orange/Red (high)
+                    val color = Color(
+                        red = (0.3f + (0.7f * fraction.toFloat())), // Scales up to more red
+                        green = (0.5f + (0.5f * (1f - fraction.toFloat()))), // Scales down green
+                        blue = (1.0f - fraction.toFloat()).coerceAtLeast(0.1f), // Scales down blue
+                        alpha = 0.15f + (0.15f * fraction.toFloat()) // Much more transparent!
+                    )
+                    
+                    val x = ((bucketTime - visibleStartTime).toFloat() / visibleTimeRange.toFloat()) * width
+                    
+                    val maxBarHeight = height * 0.85f // 15% buffer at the top
+                    
+                    // The simplest, most predictable mapping is to scale the bar directly 
+                    // from 0 height to maxBarHeight based on the fraction of max calories.
+                    val barHeight = maxBarHeight * fraction.toFloat() 
+                    
+                    val y = height - barHeight
+                    
+                    drawRect(
+                        color = color,
+                        topLeft = Offset(x, y),
+                        size = Size(barWidth - 1f, barHeight) // 1px padding
+                    )
+                }
+            }
+            
+            // Calculate total calories burned in the currently visible window
+            val totalCalsInView = visibleBuckets.values.sum()
+            
+            // Draw max calorie label with a background for better visibility
+            val labelText = "Max burned: ${String.format(java.util.Locale.getDefault(), "%.1f", maxCalsInView)} kcal / ${bucketWidthMs / 60000}m\n" +
+                            "Total visible: ${String.format(java.util.Locale.getDefault(), "%.1f", totalCalsInView)} kcal"
+            val textLayoutResult = textMeasurer.measure(
+                text = labelText,
+                style = TextStyle(color = Color.White, fontSize = 14.sp)
+            )
+            val padding = 6.dp.toPx()
+            
+            drawRoundRect(
+                color = Color(0xBB000000), // Semi-transparent black background
+                topLeft = Offset(10f, 10f),
+                size = Size(textLayoutResult.size.width + padding * 2, textLayoutResult.size.height + padding * 2),
+                cornerRadius = CornerRadius(4.dp.toPx())
+            )
+            
+            drawText(
+                textLayoutResult = textLayoutResult,
+                topLeft = Offset(10f + padding, 10f + padding)
+            )
+        }
+        
+        // --- DRAW HEART RATE METRICS ---
+        // Instead of looking at raw currentlyVisibleSamples (which contains dense data points), 
+        // we should look at the "thinnedSamples" which are the actual data points being rendered
+        // on the graph, so the text matches the visual lines!
+        // We calculate thinnedSamples below, so we'll just hoist the calculation up here:
+        
+        // Ensure samples are strictly sorted by time
+        val sortedSamples = allSamples.sortedBy { it.time }
+
+        // Filter the samples: we will group them into buckets dynamically based on zoom level.
+        val bucketSizeMs = when {
+            visibleTimeRange > 12 * 60 * 60 * 1000L -> 10 * 60 * 1000L // >12hr view: 10 min average
+            visibleTimeRange > 6 * 60 * 60 * 1000L -> 5 * 60 * 1000L // 6-12hr view: 5 min average
+            else -> 3 * 60 * 1000L // <6hr view: 3 min average
+        }
+        
+        val thinnedSamples = run {
+            val bucketedSamples = sortedSamples.groupBy { 
+                it.time.toEpochMilli() / bucketSizeMs 
+            }
+            bucketedSamples.map { (bucketIndex, samplesInBucket) ->
+                val bucketTime = bucketIndex * bucketSizeMs
+                val avgBpm = samplesInBucket.map { it.beatsPerMinute }.average().toFloat()
+                Pair(bucketTime, avgBpm)
+            }
+        }
+        
+        val visibleThinnedSamples = thinnedSamples.filter {
+            it.first in visibleStartTime..visibleEndTime
+        }
+        
+        if (visibleThinnedSamples.isNotEmpty()) {
+            val avgBpm = visibleThinnedSamples.map { it.second }.average()
+            val maxBpm = visibleThinnedSamples.maxOf { it.second }
+            val minBpm = visibleThinnedSamples.minOf { it.second }
+            
+            val hrLabelText = "Avg BPM: ${avgBpm.toInt()}\n" +
+                              "Min/Max: ${minBpm.toInt()} / ${maxBpm.toInt()}"
+            val hrTextLayoutResult = textMeasurer.measure(
+                text = hrLabelText,
+                style = TextStyle(color = Color.White, fontSize = 14.sp)
+            )
+            val padding = 6.dp.toPx()
+            
+            // If calories text is showing, we need to shift this text over to the right
+            val xOffset = if (showCalories && caloriesData.isNotEmpty()) {
+                val calLabelText = "Max burned: 99.9 kcal / 99m\nTotal visible: 999.9 kcal" // Estimate width to avoid recalculating
+                val estCalTextLayout = textMeasurer.measure(text = calLabelText, style = TextStyle(fontSize = 14.sp))
+                10f + estCalTextLayout.size.width + (padding * 4) // X padding + cal width + extra padding
+            } else {
+                10f
+            }
+            
+            drawRoundRect(
+                color = Color(0xBB000000), // Semi-transparent black background
+                topLeft = Offset(xOffset, 10f),
+                size = Size(hrTextLayoutResult.size.width + padding * 2, hrTextLayoutResult.size.height + padding * 2),
+                cornerRadius = CornerRadius(4.dp.toPx())
+            )
+            
+            drawText(
+                textLayoutResult = hrTextLayoutResult,
+                topLeft = Offset(xOffset + padding, 10f + padding)
+            )
+        }
+        
+        // --- END CALORIES LOGIC ---
+
+
         val bpmRange = yMax - yMin
         
         // Avoid division by zero
@@ -429,12 +659,7 @@ fun HeartRateGraph(heartRateData: List<HeartRateRecord>, modifier: Modifier = Mo
         }
         
         // Draw X-axis grid lines based on zoom level
-        val gridIntervalMs = when {
-            visibleTimeRange > 12 * 60 * 60 * 1000L -> 2 * 60 * 60 * 1000L
-            visibleTimeRange > 6 * 60 * 60 * 1000L -> 60 * 60 * 1000L
-            visibleTimeRange > 2 * 60 * 60 * 1000L -> 30 * 60 * 1000L
-            else -> 15 * 60 * 1000L
-        }
+        // (gridIntervalMs was already calculated above)
 
         val zoneId = ZoneId.systemDefault()
         val visibleStartZoned = ZonedDateTime.ofInstant(Instant.ofEpochMilli(visibleStartTime), zoneId)
@@ -477,27 +702,6 @@ fun HeartRateGraph(heartRateData: List<HeartRateRecord>, modifier: Modifier = Mo
 
         val path = Path()
         
-        // Ensure samples are strictly sorted by time
-        val sortedSamples = allSamples.sortedBy { it.time }
-
-        // Filter the samples: we will group them into buckets dynamically based on zoom level.
-        val bucketSizeMs = when {
-            visibleTimeRange > 12 * 60 * 60 * 1000L -> 10 * 60 * 1000L // >12hr view: 10 min average
-            visibleTimeRange > 6 * 60 * 60 * 1000L -> 5 * 60 * 1000L // 6-12hr view: 5 min average
-            else -> 3 * 60 * 1000L // <6hr view: 3 min average
-        }
-        
-        val thinnedSamples = run {
-            val bucketedSamples = sortedSamples.groupBy { 
-                it.time.toEpochMilli() / bucketSizeMs 
-            }
-            bucketedSamples.map { (bucketIndex, samplesInBucket) ->
-                val bucketTime = bucketIndex * bucketSizeMs
-                val avgBpm = samplesInBucket.map { it.beatsPerMinute }.average().toFloat()
-                Pair(bucketTime, avgBpm)
-            }
-        }
-
         var previousTime: Long? = null
         var isFirstPointInSegment = true
         var isDataMissing = false
