@@ -319,17 +319,21 @@ fun HeartRateGraph(
     val absoluteEndTimeState = rememberUpdatedState(absoluteEndTime)
     val absoluteStartTimeState = rememberUpdatedState(absoluteStartTime)
     
+    // Find the GLOBAL min and max BPM for the entire 24-hour period (not just visible)
+    val globalMinBpm = if (allSamples.isNotEmpty()) allSamples.minOf { it.beatsPerMinute }.toFloat() else 40f
+    val globalMaxBpm = if (allSamples.isNotEmpty()) allSamples.maxOf { it.beatsPerMinute }.toFloat() else 150f
+    
     // Filter the samples down to ONLY what is currently visible on the screen
     // so we can mathematically find the lowest and highest heart rate *in view*.
     val currentlyVisibleSamples = allSamples.filter {
         it.time.toEpochMilli() in (visibleStartTime)..(visibleEndTime)
     }
     
-    // If no samples are currently visible (e.g. panned to an empty spot), default to the global min/max
-    val activeMinBpm = if (currentlyVisibleSamples.isNotEmpty()) currentlyVisibleSamples.minOf { it.beatsPerMinute }.toFloat() else allSamples.minOf { it.beatsPerMinute }.toFloat()
-    val activeMaxBpm = if (currentlyVisibleSamples.isNotEmpty()) currentlyVisibleSamples.maxOf { it.beatsPerMinute }.toFloat() else allSamples.maxOf { it.beatsPerMinute }.toFloat()
+    // Dynamic Y-axis logic - THIS is what was causing the disconnect.
+    // The Y-axis (and yMin/yMax) currently changes dynamically based on what is visible.
+    val activeMinBpm = if (currentlyVisibleSamples.isNotEmpty()) currentlyVisibleSamples.minOf { it.beatsPerMinute }.toFloat() else globalMinBpm
+    val activeMaxBpm = if (currentlyVisibleSamples.isNotEmpty()) currentlyVisibleSamples.maxOf { it.beatsPerMinute }.toFloat() else globalMaxBpm
     
-    // Dynamic Y-axis: bounds fit closely to the actual min/max data CURRENTLY visible
     val yMin = (activeMinBpm - 5).coerceAtLeast(0f)
     val yMax = activeMaxBpm + 5
 
@@ -459,19 +463,22 @@ fun HeartRateGraph(
         
         // --- CALORIES BUCKETING & DRAWING LOGIC ---
         if (showCalories && caloriesData.isNotEmpty()) {
-            val bucketWidthMs = gridIntervalMs / 2 // double resolution!
+            // FIXED bucket width: 30 minutes (30 * 60 * 1000L). 
+            // If we tie bucket width to zoom level, the buckets get smaller as we zoom in, 
+            // which means less calories per bucket, causing the bars to dynamically change their meaning
+            // and the "Max burned" calculation to drastically change as you zoom!
+            val bucketWidthMs = 30 * 60 * 1000L 
             
             // Find what buckets actually intersect our visible window
-            val firstVisibleBucketStart = visibleStartTime - (visibleStartTime % bucketWidthMs)
+            // We don't need firstVisibleBucketStart anymore since we filter more accurately below
             
-            val buckets = mutableMapOf<Long, Double>()
+            // We need the global max cals from the FULL 24-HOUR DATASET, not just the buckets we calculated for the current "relevantCalories"
+            // The issue is that relevantCalories only looks at the currently visible window (+2 hrs padding).
+            // So if you zoom in, "buckets" only contains local data, meaning globalMaxCals isn't actually global!
             
-            val relevantCalories = caloriesData.filter { 
-                it.startTime.toEpochMilli() <= visibleEndTime + (2 * 60 * 60 * 1000L) && 
-                it.endTime.toEpochMilli() >= visibleStartTime - (2 * 60 * 60 * 1000L)
-            }
-
-            for (record in relevantCalories) {
+            // Let's recalculate the TRUE global max by bucketing ALL caloriesData for the last 24 hours.
+            val globalBuckets = mutableMapOf<Long, Double>()
+            for (record in caloriesData) {
                 val recordStartMs = record.startTime.toEpochMilli()
                 val recordEndMs = record.endTime.toEpochMilli()
                 val recordDuration = recordEndMs - recordStartMs
@@ -485,18 +492,20 @@ fun HeartRateGraph(
                     val bucketStart = currentMs - (currentMs % bucketWidthMs)
                     val bucketEnd = bucketStart + bucketWidthMs
                     val nextStep = minOf(recordEndMs, bucketEnd)
-                    
-                    val durationInBucket = nextStep - currentMs
-                    val calsInBucket = durationInBucket * calsPerMs
-                    
-                    buckets[bucketStart] = (buckets[bucketStart] ?: 0.0) + calsInBucket
+                    val calsInBucket = (nextStep - currentMs) * calsPerMs
+                    globalBuckets[bucketStart] = (globalBuckets[bucketStart] ?: 0.0) + calsInBucket
                     currentMs = nextStep
                 }
             }
+            
+            val globalMaxCals = globalBuckets.values.maxOrNull() ?: 1.0
+            val maxCalsToUse = globalMaxCals.coerceAtLeast(1.0)
+            
 
-            // Figure out the max to scale colors
-            val visibleBuckets = buckets.filterKeys { it in firstVisibleBucketStart..visibleEndTime }
-            val maxCalsInView = visibleBuckets.values.maxOrNull() ?: 1.0
+            val visibleBuckets = globalBuckets.filterKeys { 
+                val bucketEnd = it + bucketWidthMs
+                bucketEnd > visibleStartTime && it < visibleEndTime 
+            }
 
             clipRect(left = 0f, top = 0f, right = width, bottom = height) {
                 val barWidth = (bucketWidthMs.toFloat() / visibleTimeRange.toFloat()) * width
@@ -504,30 +513,38 @@ fun HeartRateGraph(
                 for ((bucketTime, cals) in visibleBuckets) {
                     if (cals <= 0.1) continue // Skip essentially empty buckets
                     
-                    val fraction = (cals / maxCalsInView).coerceIn(0.0, 1.0)
+                    val fraction = (cals / maxCalsToUse).coerceIn(0.0, 1.0)
                     
                     // Soft blue (low) to Orange/Red (high)
                     val color = Color(
-                        red = (0.3f + (0.7f * fraction.toFloat())), // Scales up to more red
-                        green = (0.5f + (0.5f * (1f - fraction.toFloat()))), // Scales down green
-                        blue = (1.0f - fraction.toFloat()).coerceAtLeast(0.1f), // Scales down blue
-                        alpha = 0.15f + (0.15f * fraction.toFloat()) // Much more transparent!
+                        red = (0.3f + (0.7f * fraction.toFloat())),
+                        green = (0.5f + (0.5f * (1f - fraction.toFloat()))),
+                        blue = (1.0f - fraction.toFloat()).coerceAtLeast(0.1f),
+                        alpha = 0.15f + (0.15f * fraction.toFloat())
                     )
                     
+                    // x is calculated from the bucketTime relative to visibleStartTime.
                     val x = ((bucketTime - visibleStartTime).toFloat() / visibleTimeRange.toFloat()) * width
                     
-                    val maxBarHeight = height * 0.85f // 15% buffer at the top
+                    // Map the calorie fraction to the GLOBAL BPM bounds.
+                    // This means 0 calories = global minimum BPM
+                    // Max calories = global maximum BPM
+                    val calorieBaseBpm = (globalMinBpm - 5f).coerceAtLeast(0f)
+                    val calorieTopBpm = globalMaxBpm + 5f
+                    val equivalentBpm = (calorieBaseBpm + (fraction * (calorieTopBpm - calorieBaseBpm))).toFloat()
                     
-                    // The simplest, most predictable mapping is to scale the bar directly 
-                    // from 0 height to maxBarHeight based on the fraction of max calories.
-                    val barHeight = maxBarHeight * fraction.toFloat() 
+                    // Calculate the Y position using the EXACT SAME dynamically changing yMin/yMax
+                    // that the heart rate line uses. This perfectly locks the visual relationship!
+                    val activeBpmRange = yMax - yMin
+                    val barTop = height - (((equivalentBpm - yMin) / activeBpmRange) * height)
                     
-                    val y = height - barHeight
+                    val barBottom = height
+                    val actualBarHeight = (barBottom - barTop).coerceAtLeast(0f)
                     
                     drawRect(
                         color = color,
-                        topLeft = Offset(x, y),
-                        size = Size(barWidth - 1f, barHeight) // 1px padding
+                        topLeft = Offset(x, barTop),
+                        size = Size(barWidth - 1f, actualBarHeight)
                     )
                 }
             }
@@ -536,7 +553,7 @@ fun HeartRateGraph(
             val totalCalsInView = visibleBuckets.values.sum()
             
             // Draw max calorie label with a background for better visibility
-            val labelText = "Max burned: ${String.format(java.util.Locale.getDefault(), "%.1f", maxCalsInView)} kcal / ${bucketWidthMs / 60000}m\n" +
+            val labelText = "Max burned (global): ${String.format(java.util.Locale.getDefault(), "%.1f", maxCalsToUse)} kcal / ${bucketWidthMs / 60000}m\n" +
                             "Total visible: ${String.format(java.util.Locale.getDefault(), "%.1f", totalCalsInView)} kcal"
             val textLayoutResult = textMeasurer.measure(
                 text = labelText,
