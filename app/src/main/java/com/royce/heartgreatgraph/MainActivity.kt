@@ -688,11 +688,22 @@ fun HeartRateGraph(
         
         while (currentTimeLine <= visibleEndTime) {
             val x = ((currentTimeLine - visibleStartTime).toFloat() / visibleTimeRange.toFloat()) * width
+            
+            val zoneIdInstance = ZonedDateTime.ofInstant(Instant.ofEpochMilli(currentTimeLine), zoneId)
+            
+            // Check if this timeline falls exactly on the hour (minute == 0)
+            val isTopOfHour = zoneIdInstance.minute == 0
+            
+            // All lines are thin, but sub-hour lines are dashed!
+            // First float is line length, second float is blank space length
+            val pathEffect = if (!isTopOfHour) PathEffect.dashPathEffect(floatArrayOf(10f, 20f), 0f) else null
+            
             drawLine(
                 color = Color.LightGray.copy(alpha = 0.5f),
                 start = Offset(x, 0f),
                 end = Offset(x, height),
-                strokeWidth = 1.dp.toPx()
+                strokeWidth = 1.dp.toPx(),
+                pathEffect = pathEffect
             )
             
             val formatter = if (gridIntervalMs >= 60 * 60 * 1000L) DateTimeFormatter.ofPattern("HH") else DateTimeFormatter.ofPattern("HH:mm")
@@ -700,10 +711,9 @@ fun HeartRateGraph(
             // Only draw the label if we are at a 2hr, 1hr, or 15min zoom level.
             // When we are at the 30min zoom level, the text is too crowded, so we only 
             // draw the label for the top of the hour (HH:00) and skip the half-hours (HH:30).
-            val zoneIdInstance = ZonedDateTime.ofInstant(Instant.ofEpochMilli(currentTimeLine), zoneId)
             val timeString = formatter.format(zoneIdInstance)
             
-            val shouldDrawLabel = gridIntervalMs != 30 * 60 * 1000L || zoneIdInstance.minute == 0
+            val shouldDrawLabel = gridIntervalMs != 30 * 60 * 1000L || isTopOfHour
             
             if (shouldDrawLabel) {
                 drawText(
