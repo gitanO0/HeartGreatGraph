@@ -5,6 +5,10 @@ on:
     paths:
       - 'app/build.gradle.kts' # Trigger only if this file changes (where version is stored)
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
