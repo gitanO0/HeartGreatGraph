@@ -2,6 +2,8 @@ name: Build APK on Version Bump
 
 on:
   push:
+    branches:
+      - main # Only run when pushing to main
     paths:
       - 'app/build.gradle.kts' # Trigger only if this file changes (where version is stored)
 
