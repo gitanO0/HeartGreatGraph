@@ -11,6 +11,7 @@ Using the official Android **Health Connect API**, HeartGreatGraph securely read
 
 *   **24-Hour Rolling View:** Instantly see your heart rate trends from exactly 24 hours ago up to this very minute.
 *   **Active Calories Overlay:** Toggle a dynamic overlay to see your active calories burned alongside your heart rate data. The calorie bars scale intelligently to match your zooming and panning.
+*   **Min/Avg/Max Lines:** Toggle dashed reference lines (Min, Average, and Max) that dynamically recalculate and draw themselves based on the exact time window you are currently viewing.
 *   **Contextual Metrics:** See real-time metrics for the currently visible time window! The app calculates your Average, Minimum, and Maximum BPM, as well as Total Calories Burned, based on what you are looking at.
 *   **Interactive Scrubber:** Long-press anywhere on the graph to bring up the precision scrubber! Drag it left and right to see the exact time and BPM (Beats Per Minute) for any point on the chart.
 *   **Pinch-to-Zoom & Pan:** Pinch the chart to zoom in for minute-by-minute details, or drag to pan smoothly through your day's history.

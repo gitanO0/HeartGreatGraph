@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.material3.Checkbox
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.sp
@@ -93,6 +94,7 @@ class MainActivity : ComponentActivity() {
                     var heartRateData by remember { mutableStateOf<List<HeartRateRecord>>(emptyList()) }
                     var caloriesData by remember { mutableStateOf<List<androidx.health.connect.client.records.TotalCaloriesBurnedRecord>>(emptyList()) }
                     var showCalories by remember { mutableStateOf(false) }
+                    var showStats by remember { mutableStateOf(false) }
                     var sdkAvailable by remember { mutableStateOf(availabilityStatus == HealthConnectClient.SDK_AVAILABLE) }
                     var sdkError by remember { mutableStateOf<String?>(null) }
                     val coroutineScope = rememberCoroutineScope()
@@ -175,6 +177,13 @@ class MainActivity : ComponentActivity() {
                                             )
                                             Text(text = "Show Calories", fontSize = 12.sp)
                                         }
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Checkbox(
+                                                checked = showStats,
+                                                onCheckedChange = { showStats = it },
+                                            )
+                                            Text(text = "Show Min/Avg/Max", fontSize = 12.sp)
+                                        }
                                     }
                                     Button(
                                         onClick = { 
@@ -189,6 +198,7 @@ class MainActivity : ComponentActivity() {
                                     heartRateData = heartRateData,
                                     caloriesData = caloriesData,
                                     showCalories = showCalories,
+                                    showStats = showStats,
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .weight(1f) // Takes up remaining space instead of fixed 300.dp
@@ -284,6 +294,7 @@ fun HeartRateGraph(
     heartRateData: List<HeartRateRecord>,
     caloriesData: List<androidx.health.connect.client.records.TotalCaloriesBurnedRecord>,
     showCalories: Boolean,
+    showStats: Boolean,
     modifier: Modifier = Modifier
 ) {
     if (heartRateData.isEmpty()) {
@@ -323,16 +334,40 @@ fun HeartRateGraph(
     val globalMinBpm = if (allSamples.isNotEmpty()) allSamples.minOf { it.beatsPerMinute }.toFloat() else 40f
     val globalMaxBpm = if (allSamples.isNotEmpty()) allSamples.maxOf { it.beatsPerMinute }.toFloat() else 150f
     
-    // Filter the samples down to ONLY what is currently visible on the screen
-    // so we can mathematically find the lowest and highest heart rate *in view*.
-    val currentlyVisibleSamples = allSamples.filter {
-        it.time.toEpochMilli() in (visibleStartTime)..(visibleEndTime)
-    }
-    
+
     // Dynamic Y-axis logic - THIS is what was causing the disconnect.
     // The Y-axis (and yMin/yMax) currently changes dynamically based on what is visible.
-    val activeMinBpm = if (currentlyVisibleSamples.isNotEmpty()) currentlyVisibleSamples.minOf { it.beatsPerMinute }.toFloat() else globalMinBpm
-    val activeMaxBpm = if (currentlyVisibleSamples.isNotEmpty()) currentlyVisibleSamples.maxOf { it.beatsPerMinute }.toFloat() else globalMaxBpm
+    // For smooth drawing, base min/max on ALL thinned points that would be rendered, not just the original raw sample max/min.
+    // Because thinning averages out spikes, the actual highest point *drawn* might be slightly lower than raw activeMaxBpm.
+    // For the max line to be exactly on the peak, it needs to match the highest *drawn* peak.
+    
+    // Ensure samples are strictly sorted by time
+    val sortedSamples = allSamples.sortedBy { it.time }
+
+    // Filter the samples: we will group them into buckets dynamically based on zoom level.
+    val bucketSizeMs = when {
+        visibleTimeRange > 12 * 60 * 60 * 1000L -> 10 * 60 * 1000L // >12hr view: 10 min average
+        visibleTimeRange > 6 * 60 * 60 * 1000L -> 5 * 60 * 1000L // 6-12hr view: 5 min average
+        else -> 3 * 60 * 1000L // <6hr view: 3 min average
+    }
+    
+    val thinnedSamples = run {
+        val bucketedSamples = sortedSamples.groupBy { 
+            it.time.toEpochMilli() / bucketSizeMs 
+        }
+        bucketedSamples.map { (bucketIndex, samplesInBucket) ->
+            val bucketTime = bucketIndex * bucketSizeMs
+            val avgBpm = samplesInBucket.map { it.beatsPerMinute }.average().toFloat()
+            Pair(bucketTime, avgBpm)
+        }
+    }
+    
+    val visibleThinnedSamples = thinnedSamples.filter {
+        it.first in visibleStartTime..visibleEndTime
+    }
+
+    val activeMinBpm = if (visibleThinnedSamples.isNotEmpty()) visibleThinnedSamples.minOf { it.second } else globalMinBpm
+    val activeMaxBpm = if (visibleThinnedSamples.isNotEmpty()) visibleThinnedSamples.maxOf { it.second } else globalMaxBpm
     
     val yMin = (activeMinBpm - 5).coerceAtLeast(0f)
     val yMax = activeMaxBpm + 5
@@ -575,36 +610,6 @@ fun HeartRateGraph(
         }
         
         // --- DRAW HEART RATE METRICS ---
-        // Instead of looking at raw currentlyVisibleSamples (which contains dense data points), 
-        // we should look at the "thinnedSamples" which are the actual data points being rendered
-        // on the graph, so the text matches the visual lines!
-        // We calculate thinnedSamples below, so we'll just hoist the calculation up here:
-        
-        // Ensure samples are strictly sorted by time
-        val sortedSamples = allSamples.sortedBy { it.time }
-
-        // Filter the samples: we will group them into buckets dynamically based on zoom level.
-        val bucketSizeMs = when {
-            visibleTimeRange > 12 * 60 * 60 * 1000L -> 10 * 60 * 1000L // >12hr view: 10 min average
-            visibleTimeRange > 6 * 60 * 60 * 1000L -> 5 * 60 * 1000L // 6-12hr view: 5 min average
-            else -> 3 * 60 * 1000L // <6hr view: 3 min average
-        }
-        
-        val thinnedSamples = run {
-            val bucketedSamples = sortedSamples.groupBy { 
-                it.time.toEpochMilli() / bucketSizeMs 
-            }
-            bucketedSamples.map { (bucketIndex, samplesInBucket) ->
-                val bucketTime = bucketIndex * bucketSizeMs
-                val avgBpm = samplesInBucket.map { it.beatsPerMinute }.average().toFloat()
-                Pair(bucketTime, avgBpm)
-            }
-        }
-        
-        val visibleThinnedSamples = thinnedSamples.filter {
-            it.first in visibleStartTime..visibleEndTime
-        }
-        
         if (visibleThinnedSamples.isNotEmpty()) {
             val avgBpm = visibleThinnedSamples.map { it.second }.average()
             val maxBpm = visibleThinnedSamples.maxOf { it.second }
@@ -775,6 +780,57 @@ fun HeartRateGraph(
         }
 
         clipRect {
+            if (showStats) {
+                // Min, Avg, Max Lines
+                val minLineY = height - (((activeMinBpm - yMin) / bpmRange) * height)
+                val maxLineY = height - (((activeMaxBpm - yMin) / bpmRange) * height)
+
+                // Calculate active average
+                var activeAvgBpm = 0f
+                if (visibleThinnedSamples.isNotEmpty()) {
+                    activeAvgBpm = visibleThinnedSamples.map { it.second }.average().toFloat()
+                } else if (thinnedSamples.isNotEmpty()) {
+                    activeAvgBpm = thinnedSamples.map { it.second }.average().toFloat()
+                }
+
+                if (activeAvgBpm > 0f) {
+                     val avgLineY = height - (((activeAvgBpm - yMin) / bpmRange) * height)
+
+                     drawLine(
+                         color = Color(0xFF64B5F6), // Lighter Blue
+                         start = Offset(0f, minLineY),
+                         end = Offset(width, minLineY),
+                         strokeWidth = 2.dp.toPx(),
+                         pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 15f), 0f)
+                     )
+
+                     drawLine(
+                         color = Color.Gray,
+                         start = Offset(0f, avgLineY),
+                         end = Offset(width, avgLineY),
+                         strokeWidth = 2.dp.toPx(),
+                         pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 15f), 0f)
+                     )
+
+                     drawLine(
+                         color = Color.Unspecified, // fallback
+                         start = Offset(0f, maxLineY),
+                         end = Offset(width, maxLineY),
+                         strokeWidth = 2.dp.toPx(),
+                         pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 15f), 0f)
+                     )
+                     
+                     // Draw actual orange for Max Line
+                     drawLine(
+                         color = Color(0xFFFFA500), // Orange
+                         start = Offset(0f, maxLineY),
+                         end = Offset(width, maxLineY),
+                         strokeWidth = 2.dp.toPx(),
+                         pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 15f), 0f)
+                     )
+                }
+            }
+
             if (isDataMissing) {
                 drawPath(
                     path = missingDataPath,
