@@ -55,8 +55,8 @@ import androidx.compose.ui.unit.sp
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.HeartRateRecord
-import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import com.royce.heartgreatgraph.ui.theme.HeartGreatGraphTheme
@@ -76,7 +76,7 @@ class MainActivity : ComponentActivity() {
     private val permissions = setOf(
         HealthPermission.getReadPermission(HeartRateRecord::class),
         HealthPermission.getReadPermission(androidx.health.connect.client.records.TotalCaloriesBurnedRecord::class),
-        HealthPermission.getReadPermission(StepsRecord::class)
+        HealthPermission.getReadPermission(DistanceRecord::class)
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -95,9 +95,9 @@ class MainActivity : ComponentActivity() {
                     var refreshTrigger by remember { mutableIntStateOf(0) }
                     var heartRateData by remember { mutableStateOf<List<HeartRateRecord>>(emptyList()) }
                     var caloriesData by remember { mutableStateOf<List<androidx.health.connect.client.records.TotalCaloriesBurnedRecord>>(emptyList()) }
-                    var stepsData by remember { mutableStateOf<List<StepsRecord>>(emptyList()) }
+                    var distanceData by remember { mutableStateOf<List<DistanceRecord>>(emptyList()) }
                     var showCalories by remember { mutableStateOf(false) }
-                    var showSteps by remember { mutableStateOf(false) }
+                    var showDistance by remember { mutableStateOf(false) }
                     var showStats by remember { mutableStateOf(false) }
                     var sdkAvailable by remember { mutableStateOf(availabilityStatus == HealthConnectClient.SDK_AVAILABLE) }
                     var sdkError by remember { mutableStateOf<String?>(null) }
@@ -116,7 +116,7 @@ class MainActivity : ComponentActivity() {
                             coroutineScope.launch {
                                 heartRateData = readHeartRateData(healthConnectClient)
                                 caloriesData = readCaloriesData(healthConnectClient)
-                                stepsData = readStepsData(healthConnectClient)
+                                distanceData = readDistanceData(healthConnectClient)
                             }
                         }
                     }
@@ -132,7 +132,7 @@ class MainActivity : ComponentActivity() {
                             while(true) {
                                 heartRateData = readHeartRateData(healthConnectClient)
                                 caloriesData = readCaloriesData(healthConnectClient)
-                                stepsData = readStepsData(healthConnectClient)
+                                distanceData = readDistanceData(healthConnectClient)
                                 delay(5 * 60 * 1000L) // Wait 5 minutes
                             }
                         }
@@ -189,10 +189,10 @@ class MainActivity : ComponentActivity() {
                                             }
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 Checkbox(
-                                                    checked = showSteps,
-                                                    onCheckedChange = { showSteps = it },
+                                                    checked = showDistance,
+                                                    onCheckedChange = { showDistance = it },
                                                 )
-                                                Text(text = "Show Steps", fontSize = 12.sp)
+                                                Text(text = "Show Distance", fontSize = 12.sp)
                                             }
                                         }
                                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -200,16 +200,16 @@ class MainActivity : ComponentActivity() {
                                                 checked = showStats,
                                                 onCheckedChange = { showStats = it },
                                             )
-                                            Text(text = "Show HR Min/Avg/Max", fontSize = 12.sp)
+                                            Text(text = "HR Min/Avg/Max", fontSize = 12.sp)
                                         }
                                     }
                                 }
                                 HeartRateGraph(
                                     heartRateData = heartRateData,
                                     caloriesData = caloriesData,
-                                    stepsData = stepsData,
+                                    distanceData = distanceData,
                                     showCalories = showCalories,
-                                    showSteps = showSteps,
+                                    showDistance = showDistance,
                                     showStats = showStats,
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -300,7 +300,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun readStepsData(client: HealthConnectClient): List<StepsRecord> {
+    private suspend fun readDistanceData(client: HealthConnectClient): List<DistanceRecord> {
         val zoneId = ZoneId.systemDefault()
         val nowZoned = ZonedDateTime.now(zoneId)
         val startTimeZoned = nowZoned.minusHours(24)
@@ -309,13 +309,13 @@ class MainActivity : ComponentActivity() {
         val startTime = startTimeZoned.toInstant()
 
         return try {
-            val allRecords = mutableListOf<StepsRecord>()
+            val allRecords = mutableListOf<DistanceRecord>()
             var pageToken: String? = null
             
             do {
                 val readResponse = client.readRecords(
                     ReadRecordsRequest(
-                        recordType = StepsRecord::class,
+                        recordType = DistanceRecord::class,
                         timeRangeFilter = TimeRangeFilter.between(startTime, endTime),
                         pageToken = pageToken
                     )
@@ -336,9 +336,9 @@ class MainActivity : ComponentActivity() {
 fun HeartRateGraph(
     heartRateData: List<HeartRateRecord>,
     caloriesData: List<androidx.health.connect.client.records.TotalCaloriesBurnedRecord>,
-    stepsData: List<StepsRecord>,
+    distanceData: List<DistanceRecord>,
     showCalories: Boolean,
-    showSteps: Boolean,
+    showDistance: Boolean,
     showStats: Boolean,
     modifier: Modifier = Modifier
 ) {
@@ -633,266 +633,9 @@ fun HeartRateGraph(
             // (Label drawing moved to the end so it stays on top of everything)
         }
         
-        // --- STEPS BUCKETING & DRAWING LOGIC ---
-        if (showSteps && stepsData.isNotEmpty()) {
-            val bucketWidthMs = 15 * 60 * 1000L // 15 minute buckets for finer granularity
-            
-            val globalBuckets = mutableMapOf<Long, Long>()
-            for (record in stepsData) {
-                val recordStartMs = record.startTime.toEpochMilli()
-                val recordEndMs = record.endTime.toEpochMilli()
-                val recordDuration = recordEndMs - recordStartMs
-                if (recordDuration <= 0) continue
-                
-                val count = record.count
-                val countPerMs = count.toDouble() / recordDuration
-
-                var currentMs = recordStartMs
-                while (currentMs < recordEndMs) {
-                    val bucketStart = currentMs - (currentMs % bucketWidthMs)
-                    val bucketEnd = bucketStart + bucketWidthMs
-                    val nextStep = minOf(recordEndMs, bucketEnd)
-                    val countInBucket = ((nextStep - currentMs) * countPerMs).toLong()
-                    globalBuckets[bucketStart] = (globalBuckets[bucketStart] ?: 0L) + countInBucket
-                    currentMs = nextStep
-                }
-            }
-            
-            val globalMaxSteps = globalBuckets.values.maxOrNull() ?: 1L
-            val maxStepsToUse = globalMaxSteps.coerceAtLeast(1L)
-            
-            val visibleBuckets = globalBuckets.filterKeys { 
-                val bucketEnd = it + bucketWidthMs
-                bucketEnd > visibleStartTime && it < visibleEndTime 
-            }
-
-            clipRect(left = 0f, top = 0f, right = width, bottom = height) {
-                // Position the steps baseline slightly above the very bottom.
-                // We'll place it 1/6th of the way up the graph.
-                val baselineY = height - (height * 0.15f)
-                
-                for ((bucketTime, count) in visibleBuckets) {
-                    if (count <= 0) continue
-                    
-                    val fraction = (count.toFloat() / maxStepsToUse.toFloat()).coerceIn(0f, 1f)
-                    
-                    // We draw a circle at the center of the time bucket.
-                    val bucketCenterTime = bucketTime + (bucketWidthMs / 2)
-                    val cx = ((bucketCenterTime - visibleStartTime).toFloat() / visibleTimeRange.toFloat()) * width
-                    
-                    // The radius scales based on step count.
-                    // Adjusted per user feedback: a bit more variance than the 'flattened' state
-                    val minRadius = 3.dp.toPx()
-                    val maxRadius = 14.dp.toPx()
-                    
-                    // Add steps/tiers to the radius calculation to give a more distinct gradient
-                    // rather than a perfectly smooth linear slide. 
-                    val steppedFraction = when {
-                        fraction < 0.1f -> 0.1f
-                        fraction < 0.3f -> 0.3f
-                        fraction < 0.5f -> 0.5f
-                        fraction < 0.7f -> 0.7f
-                        fraction < 0.9f -> 0.9f
-                        else -> 1.0f
-                    }
-                    
-                    // The zoomFactor calculation was aggressively magnifying the minimum radius 
-                    // (because 3dp * sqrt(12) = 10dp, making the smallest look almost like the largest).
-                    // We only want to magnify the visual weight of the *activity*, not the baseline dot.
-                    val zoomFactor = (24 * 60 * 60 * 1000L).toFloat() / visibleTimeRange.toFloat()
-                    val zoomMultiplier = Math.sqrt(zoomFactor.toDouble()).toFloat()
-                    
-                    // Modify transparency based on zoom. At full zoom out (zoomFactor = 1), modifier is 1f.
-                    // As we zoom in, the modifier increases, making things more opaque.
-                    // A zoomFactor of 12 (2 hour window) will yield a multiplier of roughly 2.0 (half transparency/twice opacity)
-                    val baseAlpha = 0.25f + (0.35f * steppedFraction) // Range: 0.25 to 0.60
-                    val zoomAlphaModifier = 1f + ((zoomFactor - 1f) / 11f) // Maps zoomFactor 1..12 to modifier 1.0..2.0
-                    
-                    // Coerce to max 1.0 so we never draw fully opaque solid blobs
-                    val dynamicAlpha = (baseAlpha * zoomAlphaModifier).coerceAtMost(0.9f)
-                    
-                    // Keep the min radius relatively stable, only heavily scale the variance (maxRadius - minRadius)
-                    // Lowered the zoom impact on the minimum radius (from 0.15x to 0.05x)
-                    val dynamicRadius = minRadius * (1f + (zoomMultiplier * 0.05f)) + (steppedFraction * (maxRadius - minRadius) * zoomMultiplier).coerceAtMost(maxRadius * 2.5f)
-
-                    val color = Color(0xFF81C784).copy(alpha = dynamicAlpha) // Even brighter Material Green (was 66BB6A)
-                    
-                    drawCircle(
-                        color = color,
-                        radius = dynamicRadius,
-                        center = Offset(cx, baselineY)
-                    )
-                }
-                
-                // Draw a faint reference line for the baseline
-                drawLine(
-                    color = Color(0xFF81C784).copy(alpha = 0.3f), // Match the new vibrant green
-                    start = Offset(0f, baselineY),
-                    end = Offset(width, baselineY),
-                    strokeWidth = 1.dp.toPx(),
-                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f)
-                )
-            }
-            
-            // (Label drawing moved to the end so it stays on top of everything)
-        }
-        
         // --- END METRICS LOGIC ---
 
-
         val bpmRange = yMax - yMin
-        
-        // --- DRAW METRICS BOXES LAST SO THEY STAY ON TOP ---
-        
-        var currentLabelY = 10f
-        
-        if (showCalories && caloriesData.isNotEmpty()) {
-            val bucketWidthMs = 30 * 60 * 1000L 
-            
-            // Re-calculate the global buckets (we just need the values for the label here)
-            val globalBuckets = mutableMapOf<Long, Double>()
-            for (record in caloriesData) {
-                val recordStartMs = record.startTime.toEpochMilli()
-                val recordEndMs = record.endTime.toEpochMilli()
-                val recordDuration = recordEndMs - recordStartMs
-                if (recordDuration <= 0) continue
-                
-                val cals = record.energy.inKilocalories
-                val calsPerMs = cals / recordDuration
-
-                var currentMs = recordStartMs
-                while (currentMs < recordEndMs) {
-                    val bucketStart = currentMs - (currentMs % bucketWidthMs)
-                    val bucketEnd = bucketStart + bucketWidthMs
-                    val nextStep = minOf(recordEndMs, bucketEnd)
-                    val calsInBucket = (nextStep - currentMs) * calsPerMs
-                    globalBuckets[bucketStart] = (globalBuckets[bucketStart] ?: 0.0) + calsInBucket
-                    currentMs = nextStep
-                }
-            }
-            
-            val globalMaxCals = globalBuckets.values.maxOrNull() ?: 1.0
-            val maxCalsToUse = globalMaxCals.coerceAtLeast(1.0)
-            
-            val visibleBuckets = globalBuckets.filterKeys { 
-                val bucketEnd = it + bucketWidthMs
-                bucketEnd > visibleStartTime && it < visibleEndTime 
-            }
-            
-            val totalCalsInView = visibleBuckets.values.sum()
-            
-            val labelText = "Max burned (global): ${String.format(java.util.Locale.getDefault(), "%.1f", maxCalsToUse)} kcal / ${bucketWidthMs / 60000}m\n" +
-                            "Total visible: ${String.format(java.util.Locale.getDefault(), "%.1f", totalCalsInView)} kcal"
-            val textLayoutResult = textMeasurer.measure(
-                text = labelText,
-                style = TextStyle(color = Color.White, fontSize = 14.sp)
-            )
-            val padding = 6.dp.toPx()
-            
-            drawRoundRect(
-                color = Color(0xBB000000), // Semi-transparent black background
-                topLeft = Offset(10f, currentLabelY),
-                size = Size(textLayoutResult.size.width + padding * 2, textLayoutResult.size.height + padding * 2),
-                cornerRadius = CornerRadius(4.dp.toPx())
-            )
-            
-            drawText(
-                textLayoutResult = textLayoutResult,
-                topLeft = Offset(10f + padding, currentLabelY + padding)
-            )
-            
-            currentLabelY += textLayoutResult.size.height + padding * 2 + 10f
-        }
-        
-        if (showSteps && stepsData.isNotEmpty()) {
-            val bucketWidthMs = 15 * 60 * 1000L // Changed to match the drawing logic
-            
-            // Re-calculate the global buckets (we just need the values for the label here)
-            val globalBuckets = mutableMapOf<Long, Long>()
-            for (record in stepsData) {
-                val recordStartMs = record.startTime.toEpochMilli()
-                val recordEndMs = record.endTime.toEpochMilli()
-                val recordDuration = recordEndMs - recordStartMs
-                if (recordDuration <= 0) continue
-                
-                val count = record.count
-                val countPerMs = count.toDouble() / recordDuration
-
-                var currentMs = recordStartMs
-                while (currentMs < recordEndMs) {
-                    val bucketStart = currentMs - (currentMs % bucketWidthMs)
-                    val bucketEnd = bucketStart + bucketWidthMs
-                    val nextStep = minOf(recordEndMs, bucketEnd)
-                    val countInBucket = ((nextStep - currentMs) * countPerMs).toLong()
-                    globalBuckets[bucketStart] = (globalBuckets[bucketStart] ?: 0L) + countInBucket
-                    currentMs = nextStep
-                }
-            }
-            
-            val globalMaxSteps = globalBuckets.values.maxOrNull() ?: 1L
-            val maxStepsToUse = globalMaxSteps.coerceAtLeast(1L)
-            
-            val visibleBuckets = globalBuckets.filterKeys { 
-                val bucketEnd = it + bucketWidthMs
-                bucketEnd > visibleStartTime && it < visibleEndTime 
-            }
-            
-            val totalStepsInView = visibleBuckets.values.sum()
-            
-            // 2000 steps roughly equals 1 mile
-            val stepsToMiles = { steps: Long -> steps / 2000.0 }
-            
-            val maxMiles = stepsToMiles(maxStepsToUse)
-            val totalMilesInView = stepsToMiles(totalStepsInView)
-            
-            val labelText = "Max steps (global): $maxStepsToUse (${String.format(java.util.Locale.getDefault(), "%.2f", maxMiles)} mi) / ${bucketWidthMs / 60000}m\n" +
-                            "Total visible: $totalStepsInView steps (${String.format(java.util.Locale.getDefault(), "%.2f", totalMilesInView)} mi)"
-            val textLayoutResult = textMeasurer.measure(
-                text = labelText,
-                style = TextStyle(color = Color.White, fontSize = 14.sp)
-            )
-            val padding = 6.dp.toPx()
-            
-            drawRoundRect(
-                color = Color(0xBB000000), 
-                topLeft = Offset(10f, currentLabelY),
-                size = Size(textLayoutResult.size.width + padding * 2, textLayoutResult.size.height + padding * 2),
-                cornerRadius = CornerRadius(4.dp.toPx())
-            )
-            
-            drawText(
-                textLayoutResult = textLayoutResult,
-                topLeft = Offset(10f + padding, currentLabelY + padding)
-            )
-            
-            currentLabelY += textLayoutResult.size.height + padding * 2 + 10f
-        }
-        
-        if (visibleThinnedSamples.isNotEmpty()) {
-            val avgBpm = visibleThinnedSamples.map { it.second }.average()
-            val maxBpm = visibleThinnedSamples.maxOf { it.second }
-            val minBpm = visibleThinnedSamples.minOf { it.second }
-            
-            val hrLabelText = "Avg BPM: ${avgBpm.toInt()}\n" +
-                              "Min/Max: ${minBpm.toInt()} / ${maxBpm.toInt()}"
-            val hrTextLayoutResult = textMeasurer.measure(
-                text = hrLabelText,
-                style = TextStyle(color = Color.White, fontSize = 14.sp)
-            )
-            val padding = 6.dp.toPx()
-            
-            drawRoundRect(
-                color = Color(0xBB000000), // Semi-transparent black background
-                topLeft = Offset(10f, currentLabelY),
-                size = Size(hrTextLayoutResult.size.width + padding * 2, hrTextLayoutResult.size.height + padding * 2),
-                cornerRadius = CornerRadius(4.dp.toPx())
-            )
-            
-            drawText(
-                textLayoutResult = hrTextLayoutResult,
-                topLeft = Offset(10f + padding, currentLabelY + padding)
-            )
-        }
         
         // Draw grid lines BEFORE drawing the red data line so the red line sits on top!
         // Dynamic Y-axis grid lines (every 10 bpm, or every 5 bpm if zoom is tight)
@@ -1021,6 +764,115 @@ fun HeartRateGraph(
         }
 
         clipRect {
+            
+            if (isDataMissing) {
+                drawPath(
+                    path = missingDataPath,
+                    color = Color.Red.copy(alpha = 0.5f),
+                    style = Stroke(
+                        width = 2.dp.toPx(),
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 15f), 0f)
+                    )
+                )
+            }
+            
+            drawPath(
+                path = path,
+                color = Color.Red,
+                style = Stroke(
+                    width = 2.dp.toPx(), // Slightly thicker line
+                    cap = StrokeCap.Round, // Round off the ends of broken segments
+                    join = StrokeJoin.Round // Smooth out the jagged spikes where lines meet
+                )
+            )
+
+            // --- DISTANCE BUBBLES DRAWN ON TOP OF RED LINE ---
+            if (showDistance && distanceData.isNotEmpty()) {
+                val bucketWidthMs = 15 * 60 * 1000L // 15 minute buckets for finer granularity
+                
+                val globalBuckets = mutableMapOf<Long, Double>()
+                for (record in distanceData) {
+                    val recordStartMs = record.startTime.toEpochMilli()
+                    val recordEndMs = record.endTime.toEpochMilli()
+                    val recordDuration = recordEndMs - recordStartMs
+                    if (recordDuration <= 0) continue
+                    
+                    val distanceMeters = record.distance.inMeters
+                    val distancePerMs = distanceMeters / recordDuration
+
+                    var currentMs = recordStartMs
+                    while (currentMs < recordEndMs) {
+                        val bucketStart = currentMs - (currentMs % bucketWidthMs)
+                        val bucketEnd = bucketStart + bucketWidthMs
+                        val nextStep = minOf(recordEndMs, bucketEnd)
+                        val distanceInBucket = (nextStep - currentMs) * distancePerMs
+                        globalBuckets[bucketStart] = (globalBuckets[bucketStart] ?: 0.0) + distanceInBucket
+                        currentMs = nextStep
+                    }
+                }
+                
+                val globalMaxDistance = globalBuckets.values.maxOrNull() ?: 1.0
+                val maxDistanceToUse = globalMaxDistance.coerceAtLeast(1.0)
+                
+                val visibleBuckets = globalBuckets.filterKeys { 
+                    val bucketEnd = it + bucketWidthMs
+                    bucketEnd > visibleStartTime && it < visibleEndTime 
+                }
+
+                if (visibleBuckets.isNotEmpty()) {
+                    val baselineY = height - (height * 0.15f) // Position the baseline slightly above the very bottom.
+                    
+                    val maxRadius = 14.dp.toPx()
+                    val minRadius = 3.dp.toPx()
+                    
+                    for ((bucketTime, distance) in visibleBuckets) {
+                        if (distance <= 0.1) continue
+                        
+                        val fraction = (distance.toFloat() / maxDistanceToUse.toFloat()).coerceIn(0f, 1f)
+                        
+                        // We draw a circle at the center of the time bucket.
+                        val bucketCenterTime = bucketTime + (bucketWidthMs / 2)
+                        val cx = ((bucketCenterTime - visibleStartTime).toFloat() / visibleTimeRange.toFloat()) * width
+                        
+                        val steppedFraction = when {
+                            fraction < 0.1f -> 0.1f
+                            fraction < 0.3f -> 0.3f
+                            fraction < 0.5f -> 0.5f
+                            fraction < 0.7f -> 0.7f
+                            fraction < 0.9f -> 0.9f
+                            else -> 1.0f
+                        }
+                        
+                        // Modify transparency based on zoom.
+                        val baseAlpha = 0.25f + (0.35f * steppedFraction) 
+                        val zoomFactor = (24 * 60 * 60 * 1000L).toFloat() / visibleTimeRange.toFloat()
+                        val zoomAlphaModifier = 1f + ((zoomFactor - 1f) / 11f) 
+                        val dynamicAlpha = (baseAlpha * zoomAlphaModifier).coerceAtMost(0.9f)
+                        
+                        val zoomMultiplier = Math.sqrt(zoomFactor.toDouble()).toFloat()
+                        val dynamicRadius = minRadius * (1f + (zoomMultiplier * 0.05f)) + (steppedFraction * (maxRadius - minRadius) * zoomMultiplier).coerceAtMost(maxRadius * 2.5f)
+
+                        val color = Color(0xFF81C784).copy(alpha = dynamicAlpha) // Green bubbles
+                        
+                        drawCircle(
+                            color = color,
+                            radius = dynamicRadius,
+                            center = Offset(cx, baselineY)
+                        )
+                    }
+                    
+                    // Draw a faint reference line for the baseline
+                    drawLine(
+                        color = Color(0xFF81C784).copy(alpha = 0.3f),
+                        start = Offset(0f, baselineY),
+                        end = Offset(width, baselineY),
+                        strokeWidth = 1.dp.toPx(),
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f)
+                    )
+                }
+            }
+
+
             if (showStats) {
                 // Min, Avg, Max Lines
                 val minLineY = height - (((activeMinBpm - yMin) / bpmRange) * height)
@@ -1071,27 +923,6 @@ fun HeartRateGraph(
                      )
                 }
             }
-
-            if (isDataMissing) {
-                drawPath(
-                    path = missingDataPath,
-                    color = Color.Red.copy(alpha = 0.5f),
-                    style = Stroke(
-                        width = 2.dp.toPx(),
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 15f), 0f)
-                    )
-                )
-            }
-            
-            drawPath(
-                path = path,
-                color = Color.Red,
-                style = Stroke(
-                    width = 3.dp.toPx(), // Slightly thicker line
-                    cap = StrokeCap.Round, // Round off the ends of broken segments
-                    join = StrokeJoin.Round // Smooth out the jagged spikes where lines meet
-                )
-            )
             
             // --- DRAW SCRUBBER ---
             if (scrubbingPositionX != null) {
@@ -1170,6 +1001,154 @@ fun HeartRateGraph(
                         topLeft = Offset(boxX + padding, 16.dp.toPx() + padding)
                     )
                 }
+            }
+
+            // --- DRAW METRICS BOXES LAST SO THEY STAY ON TOP OF EVERYTHING ---
+            var currentLabelY = 10f
+            
+            if (showCalories && caloriesData.isNotEmpty()) {
+                val bucketWidthMs = 30 * 60 * 1000L 
+                
+                val globalBuckets = mutableMapOf<Long, Double>()
+                for (record in caloriesData) {
+                    val recordStartMs = record.startTime.toEpochMilli()
+                    val recordEndMs = record.endTime.toEpochMilli()
+                    val recordDuration = recordEndMs - recordStartMs
+                    if (recordDuration <= 0) continue
+                    
+                    val calsKcal = record.energy.inKilocalories
+                    val calsPerMs = calsKcal / recordDuration
+    
+                    var currentMs = recordStartMs
+                    while (currentMs < recordEndMs) {
+                        val bucketStart = currentMs - (currentMs % bucketWidthMs)
+                        val bucketEnd = bucketStart + bucketWidthMs
+                        val nextStep = minOf(recordEndMs, bucketEnd)
+                        val calsInBucket = (nextStep - currentMs) * calsPerMs
+                        globalBuckets[bucketStart] = (globalBuckets[bucketStart] ?: 0.0) + calsInBucket
+                        currentMs = nextStep
+                    }
+                }
+                
+                val globalMaxCals = globalBuckets.values.maxOrNull() ?: 1.0
+                val maxCalsToUse = globalMaxCals.coerceAtLeast(1.0)
+                
+                val visibleBuckets = globalBuckets.filterKeys { 
+                    val bucketEnd = it + bucketWidthMs
+                    bucketEnd > visibleStartTime && it < visibleEndTime 
+                }
+                
+                val totalCalsInView = visibleBuckets.values.sum()
+                
+                val labelText = "Max burned (global): ${String.format(java.util.Locale.getDefault(), "%.1f", maxCalsToUse)} kcal / ${bucketWidthMs / 60000}m\n" +
+                                "Total visible: ${String.format(java.util.Locale.getDefault(), "%.1f", totalCalsInView)} kcal"
+                val textLayoutResult = textMeasurer.measure(
+                    text = labelText,
+                    style = TextStyle(color = Color.White, fontSize = 14.sp)
+                )
+                val padding = 6.dp.toPx()
+                
+                drawRoundRect(
+                    color = Color(0x66000000), // Semi-transparent black (was 0xBB000000)
+                    topLeft = Offset(10f, currentLabelY),
+                    size = Size(textLayoutResult.size.width + padding * 2, textLayoutResult.size.height + padding * 2),
+                    cornerRadius = CornerRadius(4.dp.toPx())
+                )
+                
+                drawText(
+                    textLayoutResult = textLayoutResult,
+                    topLeft = Offset(10f + padding, currentLabelY + padding)
+                )
+                
+                currentLabelY += textLayoutResult.size.height + padding * 2 + 10f
+            }
+            
+            if (showDistance && distanceData.isNotEmpty()) {
+                val bucketWidthMs = 15 * 60 * 1000L 
+                
+                val globalBuckets = mutableMapOf<Long, Double>()
+                for (record in distanceData) {
+                    val recordStartMs = record.startTime.toEpochMilli()
+                    val recordEndMs = record.endTime.toEpochMilli()
+                    val recordDuration = recordEndMs - recordStartMs
+                    if (recordDuration <= 0) continue
+                    
+                    val distanceMeters = record.distance.inMeters
+                    val distancePerMs = distanceMeters / recordDuration
+    
+                    var currentMs = recordStartMs
+                    while (currentMs < recordEndMs) {
+                        val bucketStart = currentMs - (currentMs % bucketWidthMs)
+                        val bucketEnd = bucketStart + bucketWidthMs
+                        val nextStep = minOf(recordEndMs, bucketEnd)
+                        val distanceInBucket = (nextStep - currentMs) * distancePerMs
+                        globalBuckets[bucketStart] = (globalBuckets[bucketStart] ?: 0.0) + distanceInBucket
+                        currentMs = nextStep
+                    }
+                }
+                
+                val globalMaxDistance = globalBuckets.values.maxOrNull() ?: 1.0
+                val maxDistanceToUse = globalMaxDistance.coerceAtLeast(1.0)
+                
+                val visibleBuckets = globalBuckets.filterKeys { 
+                    val bucketEnd = it + bucketWidthMs
+                    bucketEnd > visibleStartTime && it < visibleEndTime 
+                }
+                
+                val totalDistanceInView = visibleBuckets.values.sum()
+                
+                val metersToMiles = { meters: Double -> meters * 0.000621371 }
+                
+                val maxMiles = metersToMiles(maxDistanceToUse)
+                val totalMilesInView = metersToMiles(totalDistanceInView)
+                
+                val labelText = "Max distance (global): ${String.format(java.util.Locale.getDefault(), "%.2f", maxMiles)} mi / ${bucketWidthMs / 60000}m\n" +
+                                "Total visible: ${String.format(java.util.Locale.getDefault(), "%.2f", totalMilesInView)} mi"
+                val textLayoutResult = textMeasurer.measure(
+                    text = labelText,
+                    style = TextStyle(color = Color.White, fontSize = 14.sp)
+                )
+                val padding = 6.dp.toPx()
+                
+                drawRoundRect(
+                    color = Color(0x66000000), // Semi-transparent black (was 0xBB000000)
+                    topLeft = Offset(10f, currentLabelY),
+                    size = Size(textLayoutResult.size.width + padding * 2, textLayoutResult.size.height + padding * 2),
+                    cornerRadius = CornerRadius(4.dp.toPx())
+                )
+                
+                drawText(
+                    textLayoutResult = textLayoutResult,
+                    topLeft = Offset(10f + padding, currentLabelY + padding)
+                )
+                
+                currentLabelY += textLayoutResult.size.height + padding * 2 + 10f
+            }
+            
+            if (visibleThinnedSamples.isNotEmpty()) {
+                val avgBpm = visibleThinnedSamples.map { it.second }.average()
+                val maxBpm = visibleThinnedSamples.maxOf { it.second }
+                val minBpm = visibleThinnedSamples.minOf { it.second }
+                
+                val hrLabelText = "Avg BPM: ${avgBpm.toInt()}\n" +
+                                  "Min/Max: ${minBpm.toInt()} / ${maxBpm.toInt()}"
+                val hrTextLayoutResult = textMeasurer.measure(
+                    text = hrLabelText,
+                    style = TextStyle(color = Color.White, fontSize = 14.sp)
+                )
+                val padding = 6.dp.toPx()
+                
+                drawRoundRect(
+                    color = Color(0x66000000), // Semi-transparent black (was 0xBB000000)
+                    topLeft = Offset(10f, currentLabelY),
+                    size = Size(hrTextLayoutResult.size.width + padding * 2, hrTextLayoutResult.size.height + padding * 2),
+                    cornerRadius = CornerRadius(4.dp.toPx())
+                )
+                
+                drawText(
+                    textLayoutResult = hrTextLayoutResult,
+                    topLeft = Offset(10f + padding, currentLabelY + padding)
+                )
             }
         }
     }
