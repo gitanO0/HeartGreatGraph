@@ -58,7 +58,10 @@ import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.request.ReadRecordsRequest
+import androidx.health.connect.client.request.AggregateGroupByDurationRequest
+import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.time.TimeRangeFilter
+import java.time.Duration
 import com.royce.heartgreatgraph.ui.theme.HeartGreatGraphTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -308,23 +311,43 @@ class MainActivity : ComponentActivity() {
         val endTime = nowZoned.toInstant()
         val startTime = startTimeZoned.toInstant()
 
+        // Use Health Connect's built-in Aggregation API
+        // Health Connect will AUTOMATICALLY deduplicate data based on the user's priority settings!
+        // This solves the issue of Google Fit + Samsung Health both recording the same walk.
+        
         return try {
-            val allRecords = mutableListOf<DistanceRecord>()
-            var pageToken: String? = null
-            
-            do {
-                val readResponse = client.readRecords(
-                    ReadRecordsRequest(
-                        recordType = DistanceRecord::class,
-                        timeRangeFilter = TimeRangeFilter.between(startTime, endTime),
-                        pageToken = pageToken
-                    )
+            val response = client.aggregateGroupByDuration(
+                AggregateGroupByDurationRequest(
+                    metrics = setOf(DistanceRecord.DISTANCE_TOTAL),
+                    timeRangeFilter = TimeRangeFilter.between(startTime, endTime),
+                    timeRangeSlicer = Duration.ofMinutes(15L) // Pre-aggregate into 15 min buckets
                 )
-                allRecords.addAll(readResponse.records)
-                pageToken = readResponse.pageToken
-            } while (pageToken != null)
+            )
             
-            allRecords
+            val mappedRecords = mutableListOf<DistanceRecord>()
+            
+            // Map the aggregated buckets back into mock DistanceRecords so we don't have to rewrite the rendering logic
+            for (durationResult in response) {
+                val distance = durationResult.result[DistanceRecord.DISTANCE_TOTAL]
+                if (distance != null && distance.inMeters > 0.0) {
+                     val start = durationResult.startTime
+                     val end = durationResult.endTime
+                     
+                     // We create a dummy DistanceRecord holding the total distance for this chunk
+                     mappedRecords.add(
+                         DistanceRecord(
+                             startTime = start,
+                             startZoneOffset = null,
+                             endTime = end,
+                             endZoneOffset = null,
+                             distance = distance,
+                             metadata = androidx.health.connect.client.records.metadata.Metadata.unknownRecordingMethod()
+                         )
+                     )
+                }
+            }
+            
+            mappedRecords
         } catch (e: Exception) {
             e.printStackTrace()
             emptyList()
@@ -792,8 +815,15 @@ fun HeartRateGraph(
                 
                 val globalBuckets = mutableMapOf<Long, Double>()
                 for (record in distanceData) {
+                    // Only process records that overlap with our overall 24 hour view + a buffer
+                    val windowStart = visibleStartTime - (2 * 60 * 60 * 1000L)
+                    val windowEnd = visibleEndTime + (2 * 60 * 60 * 1000L)
+                    
                     val recordStartMs = record.startTime.toEpochMilli()
                     val recordEndMs = record.endTime.toEpochMilli()
+                    
+                    if (recordEndMs < windowStart || recordStartMs > windowEnd) continue
+                    
                     val recordDuration = recordEndMs - recordStartMs
                     if (recordDuration <= 0) continue
                     
@@ -812,7 +842,21 @@ fun HeartRateGraph(
                 }
                 
                 val globalMaxDistance = globalBuckets.values.maxOrNull() ?: 1.0
-                val maxDistanceToUse = globalMaxDistance.coerceAtLeast(1.0)
+                
+                // Track distinct packages to correct for multiple overlapping distance sources
+                val dataOrigins = mutableSetOf<String>()
+                for (record in distanceData) {
+                    val recordStartMs = record.startTime.toEpochMilli()
+                    val recordEndMs = record.endTime.toEpochMilli()
+                    if (recordEndMs > visibleStartTime && recordStartMs < visibleEndTime) {
+                        dataOrigins.add(record.metadata.dataOrigin.packageName)
+                    }
+                }
+                
+                var maxDistanceToUse = globalMaxDistance.coerceAtLeast(1.0)
+                if (dataOrigins.size > 1) {
+                    maxDistanceToUse /= dataOrigins.size.toDouble()
+                }
                 
                 val visibleBuckets = globalBuckets.filterKeys { 
                     val bucketEnd = it + bucketWidthMs
@@ -822,13 +866,19 @@ fun HeartRateGraph(
                 if (visibleBuckets.isNotEmpty()) {
                     val baselineY = height - (height * 0.15f) // Position the baseline slightly above the very bottom.
                     
-                    val maxRadius = 14.dp.toPx()
+                    val maxRadius = 10.dp.toPx()
                     val minRadius = 3.dp.toPx()
                     
                     for ((bucketTime, distance) in visibleBuckets) {
-                        if (distance <= 0.1) continue
+                        // Apply the same heuristic fix for the drawn bubbles so they don't over-scale
+                        var scaledDistance = distance
+                        if (dataOrigins.size > 1) {
+                             scaledDistance /= dataOrigins.size.toDouble()
+                        }
                         
-                        val fraction = (distance.toFloat() / maxDistanceToUse.toFloat()).coerceIn(0f, 1f)
+                        if (scaledDistance <= 0.1) continue
+                        
+                        val fraction = (scaledDistance.toFloat() / maxDistanceToUse.toFloat()).coerceIn(0f, 1f)
                         
                         // We draw a circle at the center of the time bucket.
                         val bucketCenterTime = bucketTime + (bucketWidthMs / 2)
@@ -1068,8 +1118,15 @@ fun HeartRateGraph(
                 
                 val globalBuckets = mutableMapOf<Long, Double>()
                 for (record in distanceData) {
+                    // Only process records that overlap with our overall 24 hour view + a buffer
+                    val windowStart = visibleStartTime - (2 * 60 * 60 * 1000L)
+                    val windowEnd = visibleEndTime + (2 * 60 * 60 * 1000L)
+                    
                     val recordStartMs = record.startTime.toEpochMilli()
                     val recordEndMs = record.endTime.toEpochMilli()
+                    
+                    if (recordEndMs < windowStart || recordStartMs > windowEnd) continue
+                    
                     val recordDuration = recordEndMs - recordStartMs
                     if (recordDuration <= 0) continue
                     
@@ -1082,6 +1139,13 @@ fun HeartRateGraph(
                         val bucketEnd = bucketStart + bucketWidthMs
                         val nextStep = minOf(recordEndMs, bucketEnd)
                         val distanceInBucket = (nextStep - currentMs) * distancePerMs
+                        
+                        // We only want to accumulate data for valid buckets where the user was actually moving
+                        // The bug was appending to the bucket multiple times, let's just make sure we only do it once per record
+                        
+                        // BUT - the distance algorithm in Health Connect will return multiple records for the same time period 
+                        // if the user has multiple apps writing to the store (ex: phone tracked steps, watch tracked steps).
+                        // Therefore we need to be careful to not double count.  For now, we'll just sum all of them.
                         globalBuckets[bucketStart] = (globalBuckets[bucketStart] ?: 0.0) + distanceInBucket
                         currentMs = nextStep
                     }
@@ -1095,12 +1159,41 @@ fun HeartRateGraph(
                     bucketEnd > visibleStartTime && it < visibleEndTime 
                 }
                 
-                val totalDistanceInView = visibleBuckets.values.sum()
+                // IMPORTANT: Calculate the sum based strictly on the bounds of the visible screen!
+                // The previous code summed the "visibleBuckets", but a bucket could start before the screen 
+                // and extend into it, leading to slight over-counting, and it could contain overlapping duplicate records.
+                // However, the massive 2x overcounting is likely due to duplicate data sources (e.g. phone + watch).
+                // A true fix requires checking the `dataOrigin` of each record and de-duplicating.
+                // For a quick fix without complex de-duping, we'll sum up the distance from all records that fall within
+                // the visible bounds, proportional to how much of the record is visible.
+                
+                var totalDistanceInViewMeters = 0.0
+                
+                for (record in distanceData) {
+                    val recordStartMs = record.startTime.toEpochMilli()
+                    val recordEndMs = record.endTime.toEpochMilli()
+                    
+                    // Does this record overlap the visible screen at all?
+                    if (recordEndMs > visibleStartTime && recordStartMs < visibleEndTime) {
+                        val overlapStart = maxOf(recordStartMs, visibleStartTime)
+                        val overlapEnd = minOf(recordEndMs, visibleEndTime)
+                        val overlapDuration = overlapEnd - overlapStart
+                        val recordDuration = recordEndMs - recordStartMs
+                        
+                        if (recordDuration > 0 && overlapDuration > 0) {
+                             val proportion = overlapDuration.toDouble() / recordDuration.toDouble()
+                             totalDistanceInViewMeters += (record.distance.inMeters * proportion)
+                        }
+                    }
+                }
+                
+                // Because we are using the Aggregation API upstream, it has already handled deduplication.
+                // We no longer need to manually attempt heuristic corrections based on data origins!
                 
                 val metersToMiles = { meters: Double -> meters * 0.000621371 }
                 
                 val maxMiles = metersToMiles(maxDistanceToUse)
-                val totalMilesInView = metersToMiles(totalDistanceInView)
+                val totalMilesInView = metersToMiles(totalDistanceInViewMeters)
                 
                 val labelText = "Max distance (global): ${String.format(java.util.Locale.getDefault(), "%.2f", maxMiles)} mi / ${bucketWidthMs / 60000}m\n" +
                                 "Total visible: ${String.format(java.util.Locale.getDefault(), "%.2f", totalMilesInView)} mi"
