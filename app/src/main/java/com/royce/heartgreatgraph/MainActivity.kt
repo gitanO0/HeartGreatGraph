@@ -34,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -788,10 +789,94 @@ fun HeartRateGraph(
 
         clipRect {
             
+            // The `Brush.verticalGradient` operates on fractions of the drawn height (0f to 1f) where 0f is startY and 1f is endY.
+            // Since startY is `height` (bottom of canvas) and endY is `0f` (top of canvas),
+            // a fraction of 0.0 means the bottom of the graph (yMin).
+            // A fraction of 1.0 means the top of the graph (yMax).
+            
+            // To properly map BPM values to these fractions, we use (targetBPM - yMin) / bpmRange.
+            // However, `Brush.verticalGradient` requires stops to be in strictly ascending order and exactly between 0.0 and 1.0!
+            // The `coerceIn(0f, 1f)` isn't enough, because multiple stops might get clamped to 0.0 or 1.0 out of order, 
+            // causing rendering artifacts or incorrect scaling.
+            
+            // We must dynamically construct the color stops to only include valid, in-bounds points.
+            val stopsList = mutableListOf<Pair<Float, Color>>()
+            
+            // Helper function to map a BPM value to a 0.0 - 1.0 canvas fraction
+            val getFraction = { bpm: Float -> (bpm - yMin) / bpmRange }
+            
+            // Helper function to get exact color interpolation for any BPM
+            val getColorForBpm = { bpm: Float ->
+                when {
+                    bpm <= 50f -> Color(0xFF0033FF) // Deeper but vibrant blue
+                    bpm <= 55f -> { // Smooth transition Deeper Blue -> Bright Blue between 50 and 55
+                        val fraction = (bpm - 50f) / 5f
+                        Color(
+                            red = 0x00 / 255f + ((0x00 - 0x00) / 255f) * fraction,
+                            green = 0x33 / 255f + ((0xBF - 0x33) / 255f) * fraction,
+                            blue = 0xFF / 255f + ((0xFF - 0xFF) / 255f) * fraction
+                        )
+                    }
+                    bpm <= 60f -> { // Smooth transition Bright Blue -> Green between 55 and 60
+                        val fraction = (bpm - 55f) / 5f
+                        Color(
+                            red = 0x00 / 255f + ((0x00 - 0x00) / 255f) * fraction,
+                            green = 0xBF / 255f + ((0xFF - 0xBF) / 255f) * fraction,
+                            blue = 0xFF / 255f + ((0x00 - 0xFF) / 255f) * fraction
+                        )
+                    }
+                    bpm <= 90f -> { // Smooth transition Green -> Yellow between 60 and 90
+                        val fraction = (bpm - 60f) / 30f
+                        Color(
+                            red = 0x00 / 255f + ((0xFF - 0x00) / 255f) * fraction,
+                            green = 0xFF / 255f + ((0xFF - 0xFF) / 255f) * fraction,
+                            blue = 0x00 / 255f + ((0x00 - 0x00) / 255f) * fraction
+                        )
+                    }
+                    bpm <= 135f -> { // Smooth transition Yellow -> Red between 90 and 135
+                        val fraction = (bpm - 90f) / 45f
+                        Color(
+                            red = 0xFF / 255f + ((0xFF - 0xFF) / 255f) * fraction,
+                            green = 0xFF / 255f + ((0x00 - 0xFF) / 255f) * fraction,
+                            blue = 0x00 / 255f + ((0x00 - 0x00) / 255f) * fraction
+                        )
+                    }
+                    bpm <= 145f -> { // Smooth transition Red -> Purple between 135 and 145
+                        val fraction = (bpm - 135f) / 10f
+                        Color(
+                            red = 0xFF / 255f + ((0x9C - 0xFF) / 255f) * fraction,
+                            green = 0x00 / 255f + ((0x27 - 0x00) / 255f) * fraction,
+                            blue = 0x00 / 255f + ((0xB0 - 0x00) / 255f) * fraction
+                        )
+                    }
+                    else -> Color(0xFF9C27B0) // Bright Purple
+                }
+            }
+            
+            // Always start at 0.0 (yMin) with the interpolated color for yMin
+            stopsList.add(0.0f to getColorForBpm(yMin))
+            
+            // Add fixed stops ONLY if they are strictly inside the current visible bounds (not on the very edges)
+            if (50f > yMin && 50f < yMax) stopsList.add(getFraction(50f) to Color(0xFF0033FF))
+            if (55f > yMin && 55f < yMax) stopsList.add(getFraction(55f) to Color(0xFF00BFFF))
+            if (60f > yMin && 60f < yMax) stopsList.add(getFraction(60f) to Color(0xFF00FF00))
+            if (90f > yMin && 90f < yMax) stopsList.add(getFraction(90f) to Color(0xFFFFFF00))
+            if (135f > yMin && 135f < yMax) stopsList.add(getFraction(135f) to Color(0xFFFF0000))
+            if (145f > yMin && 145f < yMax) stopsList.add(getFraction(145f) to Color(0xFF9C27B0))
+            
+            // Always end at 1.0 (yMax) with the exact interpolated color for yMax
+            stopsList.add(1.0f to getColorForBpm(yMax))
+            
+            val hrGradient = Brush.verticalGradient(
+                colorStops = stopsList.toTypedArray(),
+                startY = height,
+                endY = 0f
+            )
+
             if (isDataMissing) {
                 drawPath(
                     path = missingDataPath,
-                    color = Color.Red.copy(alpha = 0.5f),
+                    brush = hrGradient,
                     style = Stroke(
                         width = 2.dp.toPx(),
                         pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 15f), 0f)
@@ -801,7 +886,7 @@ fun HeartRateGraph(
             
             drawPath(
                 path = path,
-                color = Color.Red,
+                brush = hrGradient,
                 style = Stroke(
                     width = 2.dp.toPx(), // Slightly thicker line
                     cap = StrokeCap.Round, // Round off the ends of broken segments
