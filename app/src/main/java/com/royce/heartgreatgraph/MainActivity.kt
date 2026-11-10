@@ -808,45 +808,37 @@ fun HeartRateGraph(
             // Helper function to get exact color interpolation for any BPM
             val getColorForBpm = { bpm: Float ->
                 when {
-                    bpm <= 50f -> Color(0xFF0033FF) // Deeper but vibrant blue
-                    bpm <= 55f -> { // Smooth transition Deeper Blue -> Bright Blue between 50 and 55
-                        val fraction = (bpm - 50f) / 5f
+                    bpm <= 45f -> Color(0xFF0033FF) // Deeper but vibrant blue
+                    bpm <= 50f -> { // Smooth transition Deeper Blue -> Bright Blue between 45 and 50
+                        val fraction = (bpm - 45f) / 5f
                         Color(
                             red = 0x00 / 255f + ((0x00 - 0x00) / 255f) * fraction,
                             green = 0x33 / 255f + ((0xBF - 0x33) / 255f) * fraction,
                             blue = 0xFF / 255f + ((0xFF - 0xFF) / 255f) * fraction
                         )
                     }
-                    bpm <= 60f -> { // Smooth transition Bright Blue -> Green between 55 and 60
-                        val fraction = (bpm - 55f) / 5f
+                    bpm <= 90f -> { // Smooth transition Bright Blue -> Yellow between 50 and 90 (Green at 60 logic replaced)
+                        val fraction = (bpm - 50f) / 40f
                         Color(
-                            red = 0x00 / 255f + ((0x00 - 0x00) / 255f) * fraction,
+                            red = 0x00 / 255f + ((0xFF - 0x00) / 255f) * fraction,
                             green = 0xBF / 255f + ((0xFF - 0xBF) / 255f) * fraction,
                             blue = 0xFF / 255f + ((0x00 - 0xFF) / 255f) * fraction
                         )
                     }
-                    bpm <= 90f -> { // Smooth transition Green -> Yellow between 60 and 90
-                        val fraction = (bpm - 60f) / 30f
-                        Color(
-                            red = 0x00 / 255f + ((0xFF - 0x00) / 255f) * fraction,
-                            green = 0xFF / 255f + ((0xFF - 0xFF) / 255f) * fraction,
-                            blue = 0x00 / 255f + ((0x00 - 0x00) / 255f) * fraction
-                        )
-                    }
-                    bpm <= 135f -> { // Smooth transition Yellow -> Red between 90 and 135
-                        val fraction = (bpm - 90f) / 45f
+                    bpm <= 140f -> { // Smooth transition Yellow -> Orange between 90 and 140
+                        val fraction = (bpm - 90f) / 50f
                         Color(
                             red = 0xFF / 255f + ((0xFF - 0xFF) / 255f) * fraction,
-                            green = 0xFF / 255f + ((0x00 - 0xFF) / 255f) * fraction,
+                            green = 0xFF / 255f + ((0xA5 - 0xFF) / 255f) * fraction,
                             blue = 0x00 / 255f + ((0x00 - 0x00) / 255f) * fraction
                         )
                     }
-                    bpm <= 145f -> { // Smooth transition Red -> Purple between 135 and 145
-                        val fraction = (bpm - 135f) / 10f
+                    bpm <= 150f -> { // Smooth transition Orange -> Red between 140 and 150
+                        val fraction = (bpm - 140f) / 10f
                         Color(
-                            red = 0xFF / 255f + ((0x9C - 0xFF) / 255f) * fraction,
-                            green = 0x00 / 255f + ((0x27 - 0x00) / 255f) * fraction,
-                            blue = 0x00 / 255f + ((0xB0 - 0x00) / 255f) * fraction
+                            red = 0xFF / 255f + ((0xFF - 0xFF) / 255f) * fraction,
+                            green = 0xA5 / 255f + ((0x00 - 0xA5) / 255f) * fraction,
+                            blue = 0x00 / 255f + ((0x00 - 0x00) / 255f) * fraction
                         )
                     }
                     else -> Color(0xFF9C27B0) // Bright Purple
@@ -857,12 +849,11 @@ fun HeartRateGraph(
             stopsList.add(0.0f to getColorForBpm(yMin))
             
             // Add fixed stops ONLY if they are strictly inside the current visible bounds (not on the very edges)
-            if (50f > yMin && 50f < yMax) stopsList.add(getFraction(50f) to Color(0xFF0033FF))
-            if (55f > yMin && 55f < yMax) stopsList.add(getFraction(55f) to Color(0xFF00BFFF))
-            if (60f > yMin && 60f < yMax) stopsList.add(getFraction(60f) to Color(0xFF00FF00))
+            if (45f > yMin && 45f < yMax) stopsList.add(getFraction(45f) to Color(0xFF0033FF))
+            if (50f > yMin && 50f < yMax) stopsList.add(getFraction(50f) to Color(0xFF00BFFF))
             if (90f > yMin && 90f < yMax) stopsList.add(getFraction(90f) to Color(0xFFFFFF00))
-            if (135f > yMin && 135f < yMax) stopsList.add(getFraction(135f) to Color(0xFFFF0000))
-            if (145f > yMin && 145f < yMax) stopsList.add(getFraction(145f) to Color(0xFF9C27B0))
+            if (140f > yMin && 140f < yMax) stopsList.add(getFraction(140f) to Color(0xFFFFA500))
+            if (150f > yMin && 150f < yMax) stopsList.add(getFraction(150f) to Color(0xFFFF0000))
             
             // Always end at 1.0 (yMax) with the exact interpolated color for yMax
             stopsList.add(1.0f to getColorForBpm(yMax))
